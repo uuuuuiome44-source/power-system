@@ -1,90 +1,108 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
 
-st.set_page_config(page_title="Power Analysis Pro", layout="wide")
-st.title("⚡ Power System Project: Circle, Triangle & Angles")
+# إعداد الصفحة
+st.set_page_config(page_title="Power Performance Analysis", layout="wide")
+st.title("⚡ Power Flow Analysis & Performance Tool")
 
-# --- القائمة الجانبية ---
-st.sidebar.header("Configuration")
-pf_type = st.sidebar.selectbox("Power Factor Type:", ["Lagging", "Unity", "Leading"])
+# --- القائمة الجانبية (Sidebar) ---
+st.sidebar.header("🎛️ مدخلات النظام")
+
+# 1. الجهود
+vs_kv = st.sidebar.number_input("جهد الإرسال (Vs) kV", value=230, step=5)
+vr_kv = st.sidebar.number_input("جهد الاستقبال (Vr) kV", value=220, step=5)
+
+# 2. نوع ومعامل القدرة للحمل فقط
+st.sidebar.subheader("Load Power Factor (Receiving)")
+pf_type = st.sidebar.selectbox("نوع PF للحمل", ["Lagging", "Unity", "Leading"])
 if pf_type == "Unity":
     pf_val = 1.0
-    st.sidebar.text("PF is fixed at 1.0")
 else:
-    pf_val = st.sidebar.slider("PF Value (cos φ)", 0.5, 0.99, 0.85)
+    pf_val = st.sidebar.slider("قيمة PF للحمل", 0.5, 0.99, 0.85)
 
-P_mw = st.sidebar.slider("Active Power (P) MW", 50, 400, 150)
-Vs_kv = st.sidebar.number_input("Vs (kV)", value=230.0)
-Vr_kv = st.sidebar.number_input("Vr (kV)", value=220.0)
-R, X = 10.0, 50.0 # قيم الخط الثابتة
+# 3. القدرة المستلمة
+pr_mw = st.sidebar.slider("القدرة المطلوبة (Pr) MW", 10, 500, 150)
 
-# --- الحسابات ---
-Z = complex(R, X)
-beta_rad = np.angle(Z)
-Vr_ph = (Vr_kv * 1000) / np.sqrt(3)
-Vs_ph = (Vs_kv * 1000) / np.sqrt(3)
+# --- الحسابات الكهربائية ---
+phi_r = 0 if pf_type == "Unity" else np.arccos(pf_val)
+if pf_type == "Leading": phi_r = -phi_r
 
-# زاوية Phi
-if pf_type == "Lagging": phi_rad = np.arccos(pf_val)
-elif pf_type == "Leading": phi_rad = -np.arccos(pf_val)
-else: phi_rad = 0.0
+qr_mvar = pr_mw * np.tan(phi_r)
+sr_mva = np.sqrt(pr_mw**2 + qr_mvar**2)
 
-Q_mvar = P_mw * np.tan(phi_rad)
-S_mva = P_mw / pf_val
+# حساب المفاقيد (Line Losses)
+vr_ph = (vr_kv * 1000) / np.sqrt(3)
+ir_mag = (pr_mw * 1e6 / 3) / (vr_ph * pf_val) if pr_mw > 0 else 0
 
-# حساب زاوية الحمل Delta
-term1 = (P_mw * 1e6 / 3) + (abs(Vr_ph)**2 / abs(Z)) * np.cos(beta_rad)
-cos_bd = np.clip((term1 * abs(Z)) / (abs(Vs_ph) * abs(Vr_ph)), -1, 1)
-delta_rad = beta_rad - np.arccos(cos_bd)
+R_line, X_line = 10, 50 # ثوابت الخط
+p_loss = (3 * (ir_mag**2) * R_line) / 1e6
+q_loss = (3 * (ir_mag**2) * X_line) / 1e6
 
-# --- الرسم البياني ---
+ps_mw = pr_mw + p_loss
+qs_mvar = qr_mvar + q_loss
+ss_mva = np.sqrt(ps_mw**2 + qs_mvar**2)
+eff = (pr_mw / ps_mw * 100) if ps_mw > 0 else 0
+pf_s = ps_mw / ss_mva if ss_mva > 0 else 1
+
+# --- دالة رسم المثلثات بألوان وكتابة بيانات ---
+def plot_detailed_triangle(ax, p, q, s, title):
+    # رسم ضلع P (أفقي) - أزرق
+    ax.plot([0, p], [0, 0], color='blue', linewidth=4, label=f'P = {p:.1f} MW')
+    ax.text(p/2, -max(abs(q), 10)*0.1, f'P={p:.1f}', color='blue', fontweight='bold', ha='center')
+    
+    # رسم ضلع Q (رأسي) - أحمر
+    ax.plot([p, p], [0, q], color='red', linewidth=4, label=f'Q = {q:.1f} MVAr')
+    ax.text(p + max(p,10)*0.02, q/2, f'Q={q:.1f}', color='red', fontweight='bold', va='center')
+    
+    # رسم وتر S (مائل) - أخضر
+    ax.plot([0, p], [0, q], color='green', linestyle='-', linewidth=3, label=f'S = {s:.1f} MVA')
+    ax.text(p/2, q/2 + (max(abs(q),10)*0.1 if q>0 else -max(abs(q),10)*0.1), f'S={s:.1f}', color='green', fontweight='bold', ha='center')
+    
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    lim = max(abs(p), abs(q), 20) * 1.3
+    ax.set_xlim(-lim/10, lim)
+    ax.set_ylim(min(0, q)-lim/4, max(0, q)+lim/4)
+    ax.axhline(0, color='black', lw=1)
+    ax.axvline(0, color='black', lw=1)
+    ax.grid(True, linestyle=':', alpha=0.6)
+
+# --- عرض الرسومات ---
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📐 Power Triangle & φ Angle")
-    fig_tri, ax_tri = plt.subplots(figsize=(7, 7))
-    # رسم الأضلاع
-    ax_tri.quiver(0, 0, P_mw, 0, angles='xy', scale_units='xy', scale=1, color='g', label='P (MW)')
-    ax_tri.quiver(P_mw, 0, 0, Q_mvar, angles='xy', scale_units='xy', scale=1, color='orange', label='Q (MVAr)')
-    ax_tri.quiver(0, 0, P_mw, Q_mvar, angles='xy', scale_units='xy', scale=1, color='purple', label='S (MVA)')
-    
-    # رسم زاوية Phi
-    if pf_type != "Unity":
-        arc_r = P_mw * 0.2
-        t = np.linspace(0, phi_rad, 30)
-        ax_tri.plot(arc_r*np.cos(t), arc_r*np.sin(t), 'r', lw=2)
-        ax_tri.text(arc_r*1.2*np.cos(phi_rad/2), arc_r*1.2*np.sin(phi_rad/2), f'φ={np.degrees(phi_rad):.1f}°', color='red', fontweight='bold')
-
-    ax_tri.set_xlim(-20, P_mw + 50); ax_tri.set_ylim(min(Q_mvar, 0)-50, max(Q_mvar, 0)+50)
-    ax_tri.axhline(0, color='black', lw=1); ax_tri.grid(True); ax_tri.legend()
-    st.pyplot(fig_tri)
+    st.subheader("📍 Receiving End (Load) Triangle")
+    fig1, ax1 = plt.subplots()
+    plot_detailed_triangle(ax1, pr_mw, qr_mvar, sr_mva, "Load Side Triangle")
+    st.pyplot(fig1)
 
 with col2:
-    st.subheader("🔵 Power Circle & δ Angle")
-    fig_cir, ax_cir = plt.subplots(figsize=(7, 7))
-    scaling = 3 * 1e-6
-    Cx, Cy = -(abs(Vr_ph)**2 / abs(Z)) * np.cos(beta_rad) * scaling, -(abs(Vr_ph)**2 / abs(Z)) * np.sin(beta_rad) * scaling
-    rad = (abs(Vs_ph) * abs(Vr_ph) / abs(Z)) * scaling
-    
-    # رسم الدائرة ونقطة التشغيل
-    circle = plt.Circle((Cx, Cy), rad, color='b', fill=False, ls='--')
-    ax_cir.add_artist(circle)
-    ax_cir.scatter([P_mw], [-Q_mvar], color='red', zorder=5)
-    
-    # رسم خط يوضح زاوية Delta (الزاوية من مركز الدائرة للنقطة)
-    ax_cir.plot([Cx, P_mw], [Cy, -Q_mvar], 'k:', alpha=0.6)
-    ax_cir.text(P_mw, -Q_mvar+10, f'δ = {np.degrees(delta_rad):.2f}°', color='blue', fontweight='bold')
-    
-    ax_cir.set_xlim(Cx-20, P_mw+100); ax_cir.set_ylim(Cy-20, 200)
-    ax_cir.axhline(0, color='black', lw=1); ax_cir.axvline(0, color='black', lw=1); ax_cir.grid(True)
-    st.pyplot(fig_cir)
+    st.subheader("📍 Sending End (Generator) Triangle")
+    fig2, ax2 = plt.subplots()
+    plot_detailed_triangle(ax2, ps_mw, qs_mvar, ss_mva, "Source Side Triangle")
+    st.pyplot(fig2)
 
-# --- الجدول التحليلي ---
-st.subheader("📊 Analysis Table")
-df = pd.DataFrame({
-    "Parameter": ["Active Power (P)", "Reactive Power (Q)", "Apparent Power (S)", "Load Angle (δ)", "PF Angle (φ)"],
-    "Value": [f"{P_mw} MW", f"{Q_mvar:.2f} MVAr", f"{S_mva:.2f} MVA", f"{np.degrees(delta_rad):.2f}°", f"{np.degrees(phi_rad):.1f}°"]
-})
-st.table(df)
+# رسم دائرة القدرة مدمجة
+st.subheader("🎯 Combined Power Circle Visualization")
+fig3, ax3 = plt.subplots(figsize=(8, 4))
+theta = np.linspace(0, 2*np.pi, 100)
+ax3.plot(sr_mva*np.cos(theta), sr_mva*np.sin(theta), 'g--', alpha=0.3, label='Receiving Limit')
+ax3.plot(ss_mva*np.cos(theta), ss_mva*np.sin(theta), 'b--', alpha=0.3, label='Sending Limit')
+ax3.scatter([pr_mw], [qr_mvar], color='green', s=100, label='Rec. Point')
+ax3.scatter([ps_mw], [qs_mvar], color='blue', s=100, label='Send. Point')
+ax3.legend()
+ax3.grid(True)
+st.pyplot(fig3)
+
+# --- الجدول التحليلي الشامل ---
+st.divider()
+st.subheader("📊 الجدول التحليلي النهائي (Analytical Results)")
+
+results_data = {
+    "البيان (Parameter)": ["Active Power (P)", "Reactive Power (Q)", "Apparent Power (S)", "Voltage (Line)", "Power Factor"],
+    "الاستقبال (Receiving)": [f"{pr_mw} MW", f"{qr_mvar:.2f} MVAr", f"{sr_mva:.2f} MVA", f"{vr_kv} kV", f"{pf_val} ({pf_type})"],
+    "الإرسال (Sending)": [f"{ps_mw:.2f} MW", f"{qs_mvar:.2f} MVAr", f"{ss_mva:.2f} MVA", f"{vs_kv} kV", f"{pf_s:.2f}"],
+    "النتائج (Performance)": [f"P-Loss: {p_loss:.2f} MW", f"Q-Loss: {q_loss:.2f} MVAr", "-", "-", f"Efficiency: {eff:.2f}%"]
+}
+
+st.table(results_data)
